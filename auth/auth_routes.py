@@ -17,7 +17,8 @@ db = Session(bind=engine)
 
 #-------------------JWT--------------#
 def token_generation(user_id: int, business_id: int):
-    expiry = (datetime.datetime.utcnow() + datetime.timedelta(days=2, minutes=0)).isoformat()
+    print("new token")
+    expiry = (datetime.datetime.utcnow() + datetime.timedelta(days=0, minutes=0)).isoformat()
     payload = {"user_id": user_id,
                "business_id": business_id,
                "expiry": expiry}
@@ -26,22 +27,37 @@ def token_generation(user_id: int, business_id: int):
     return token
 
 
-def token_verification(token, user_id, business_id):
-        try:
-            payload = jwt.decode(token, JWT_SECRET, algorithms=JWT_ALOGORITHM)
-            print(payload)
-            print("-----------",(payload["user_id"] , int(user_id) , payload["business_id"] , int(business_id)))
-            print(payload["user_id"] == int(user_id), payload["business_id"] == int(business_id) , (payload["expiry"] >= datetime.datetime.utcnow().isoformat()))
+# def authorize(token, user_id, business_id):
+        # try:
+        #     payload = jwt.decode(token, JWT_SECRET, algorithms=JWT_ALOGORITHM)
+        #     print(payload)
+        #     print("-----------",(payload["user_id"] , int(user_id) , payload["business_id"] , int(business_id)))
+        #     print(payload["user_id"] == int(user_id), payload["business_id"] == int(business_id) , (payload["expiry"] >= datetime.datetime.utcnow().isoformat()))
 
-            if (payload["user_id"] == int(user_id)) and (payload["business_id"] == int(business_id)) and (payload["expiry"] >= datetime.datetime.utcnow().isoformat()):
-                return payload["user_id"]
-            else:
-                raise HTTPException(status_code=401, detail='token expired')
+        #     if (payload["user_id"] == int(user_id)) and (payload["business_id"] == int(business_id)) and (payload["expiry"] >= datetime.datetime.utcnow().isoformat()):
+        #         return payload["user_id"]
+        #     else:
+        #         raise HTTPException(status_code=401, detail='token expired')
             
-        except jwt.ExpiredSignatureError:
-            raise HTTPException(status_code=401, detail='Signature has expired')
-        except jwt.InvalidTokenError as e:
-            raise HTTPException(status_code=401, detail='Invalid token')
+        # except jwt.ExpiredSignatureError:
+        #     raise HTTPException(status_code=401, detail='Signature has expired')
+        # except jwt.InvalidTokenError as e:
+        #     raise HTTPException(status_code=401, detail='Invalid token')
+
+def authorize(token, user_id, business_id):
+        try:
+            user_obj = db.query(models.UserUserTypeMap).filter(models.UserUserTypeMap.usertype.has(business_id = business_id),
+                                                               models.UserUserTypeMap.user_id == user_id).first()
+
+            if user_obj.token == token:
+                 return user_obj.user_id
+            else:
+                raise HTTPException(status_code=401, detail='invalid token')
+        except:
+             raise HTTPException(status_code=401, detail='invalid token')
+            
+                
+         
 
 # def auth_wrapper(auth: HTTPAuthorizationCredentials = Security(HTTPBearer())):
 #     return token_verification(auth.credentials)
@@ -77,7 +93,7 @@ async def user_signup(request: schemas.Signup):
     return HTTPException(status_code=status.HTTP_201_CREATED, detail="Sucessfully Created", headers="signup")
 
 
-@auth_route.post("/signin/", status_code=status.HTTP_200_OK)
+@auth_route.post("/signin/", status_code=status.HTTP_200_OK) 
 async def user_signin(request: schemas.UserSignin):
     user_obj = db.query(models.UserUserTypeMap).filter(models.UserUserTypeMap.usertype.has(business_id = request.business_id),
                                                        models.UserUserTypeMap.user.has(username = request.username)).first()
@@ -89,32 +105,25 @@ async def user_signin(request: schemas.UserSignin):
         db_password = user_obj.user.password.encode("utf-8")
 
         if bcrypt.checkpw(user_password, db_password):
-            if request.token == None or request.token == "":
-                return {"token": token_generation(user_obj.id,  user_obj.usertype.business_id),
-                        "business_id": user_obj.usertype.business_id,
-                        "user_id":user_obj.user_id,
-                        "prefix": user_obj.user.prefix,
-                        "first_name": user_obj.user.firstname,
-                        "last_name": user_obj.user.lastname,
-                        "is_executive": user_obj.user.is_executive}
-            else:
-                test = token_verification(request.token, user_obj.id, user_obj.usertype.business_id)
-                if test:
-                    print("token_verified")
-                    return {"token": request.token,
-                            "business_id": user_obj.usertype.business_id,
-                            "user_id":user_obj.user_id,
-                            "prefix": user_obj.user.prefix,
-                            "first_name": user_obj.user.firstname,
-                            "last_name": user_obj.user.lastname,
-                            "is_executive": user_obj.user.is_executive}
+            new_token = token_generation(user_obj.id,  user_obj.usertype.business_id)
+            print(new_token)
+            user_obj.token = new_token.decode("utf-8")
+            db.commit()
+  
+            return {"token": new_token,
+                    "business_id": user_obj.usertype.business_id,
+                    "user_id":user_obj.user_id,
+                    "prefix": user_obj.user.prefix,
+                    "first_name": user_obj.user.firstname,
+                    "last_name": user_obj.user.lastname,
+                    "is_executive": user_obj.user.is_executive}
                        
     return HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Enter valid username or password", headers="signin")
 
 
 @auth_route.get("/get/modules/")
-# async def user_signup(Secret=Depends(auth_wrapper)):
-async def user_signup(request: schemas.UserToken = Depends(token_verification)):
+async def user_signup(request: schemas.UserToken = Depends(authorize)):
+    print("----------",request)
 
     modules = db.query(models.UserTypeModulesMap).filter(models.UserTypeModulesMap.is_active == True).all()
     data = [
@@ -131,21 +140,6 @@ async def user_signup(request: schemas.UserToken = Depends(token_verification)):
     }
     for module in modules
 ]
-    # data = []
-    # for module in modules:
-    #     module_data = {
-    #         "module_id": module.module.id,
-    #         "module_name": module.module.name,
-    #         "usertype": module.usertype.id,
-    #         "sub_module": []
-    #     }
-        # for submodule_map in module.usertype_modules_map:
-        #     submodule = submodule_map.sub_module
-        #     module_data["sub_module"].append({
-        #         "module_id": submodule.id,
-        #         "module_name": submodule.name,
-        #         "usertype": submodule.usertype_sub_modules_map[0].usertype_id if submodule.usertype_sub_modules_map else None
-        #     })
-    #     data.append(module_data)
-    # db.close()
+
     return data
+

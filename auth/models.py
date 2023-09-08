@@ -58,6 +58,7 @@ class UserUserTypeMap(Base):
     id = Column(Integer, primary_key=True)
     user_id = Column(Integer, ForeignKey("user.id"))
     usertype_id = Column(Integer, ForeignKey("usertype.id"))
+    token = Column(Text, nullable=True)
 
     user = relationship("User", back_populates="user_usertype_map")
     usertype = relationship("UserType", back_populates="user_usertype_map")
